@@ -1,0 +1,17 @@
+{
+  "name": "coders-club-ps-selector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Roll the Dice. Get Your Problem Statement. — random, capacity-aware problem statement allocation for a hackathon.",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "provision": "node --env-file=.env scripts/provision-users.mjs",
+    "set-admin-password": "node --env-file=.env scripts/provision-users.mjs --set-admin-password",
+    "verify": "node --env-file=.env scripts/verify-backend.mjs",
+    "serve": "npx --yes serve public -l 5173"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}

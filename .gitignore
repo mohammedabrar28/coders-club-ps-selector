@@ -1,0 +1,12 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# dependencies / tooling
+node_modules/
+npm-debug.log*
+.DS_Store
+*.log
+.vscode/
+.idea/
