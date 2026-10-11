@@ -6,7 +6,7 @@
 //
 // NEVER put the service_role / secret key here.
 window.APP_CONFIG = Object.freeze({
-  SUPABASE_URL: "https://supabase.com/dashboard/project/anyuvpincmhtgonhkqhf",
+  SUPABASE_URL: "https://anyuvpincmhtgonhkqhf.supabase.co",
   SUPABASE_PUBLISHABLE_KEY: "sb_publishable__Y05BztjYyOL_kBlL4YDTg_mBfFvR2h",
 
   // Students type "T017"; the app signs in as t017@<EMAIL_DOMAIN> behind the scenes.
