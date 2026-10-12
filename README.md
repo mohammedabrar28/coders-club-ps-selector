@@ -23,7 +23,10 @@ coders-club-ps-selector/
 │   └── config.js            ← you paste your PUBLIC Supabase URL + key here
 ├── supabase/
 │   ├── schema.sql           ← tables, RLS, secure functions (run once)
-│   └── tests.sql            ← database self-test (rolls back, changes nothing)
+│   ├── migrations/
+│   │   └── 001_problem_statement_content.sql  ← confidential statements (additive)
+│   ├── tests.sql            ← database self-test (rolls back, changes nothing)
+│   └── tests_problem_statements.sql  ← permission/leak test for migration 001
 ├── scripts/
 │   ├── provision-users.mjs  ← creates T001–T046 + admin (run locally, safe to re-run)
 │   └── verify-backend.mjs   ← live end-to-end check (run before the event)
@@ -166,6 +169,109 @@ Give all 46 leaders the one URL plus their own ID and password.
 | Reset one team's password | `node --env-file=.env scripts/provision-users.mjs --reset-team T017` |
 
 Neither command touches assignments.
+
+---
+
+## Problem statement management (migration 001)
+
+Admins can type or paste each of the six problem statements, save drafts, publish, edit and
+preview them (admin dashboard → **Statements** tab). **The content is confidential: team leaders never
+receive it.** "Published" only means *finalised in the admin dashboard*; nothing is ever released to teams.
+
+### Apply the migration safely (existing project with live data)
+
+The migration is **additive**: it creates one new table and three new functions. It does not alter or
+touch `profiles`, `assignments`, `audit_logs`, `problem_statements` (capacity stays 8), auth users, or any
+existing function. It runs as one transaction, so a failure applies nothing, and it is safe to run twice.
+
+1. **Back up first** (cheap insurance): Supabase → *Database → Backups* (or run `pg_dump` if you use it).
+2. Make sure `supabase/schema.sql` was already applied (the migration checks and stops with a clear message if not).
+3. SQL Editor → paste `supabase/migrations/001_problem_statement_content.sql` → **Run**.
+4. Deploy the updated `public/` files (push to GitHub; the Pages workflow republishes).
+5. Run the permission test (below) **before** entering real content.
+
+New installs: run `schema.sql`, then migration 001, then `npm run provision`.
+
+### How to use it
+Sign in as admin → **Statements** → a card's **Add / Edit Problem Statement**. Fill in the form
+(title, description, category, requirements, constraints, expected outcome, optional notes) and use
+**Save Draft** or **Publish**. **Edit / Preview** toggles between the form and a read-only preview.
+Publishing needs every field except notes. Overwriting saved content or publishing asks for confirmation.
+Content is stored in the database, so you can log out, log in on another device and find it intact.
+If two admin sessions edit the same statement, the second save is refused rather than silently
+overwriting (you'll see a message; reopen the statement to get the latest).
+
+### How to test the permissions (do all three)
+
+**A. Database test, checks PostgreSQL itself (about 1 minute).**
+SQL Editor → paste `supabase/tests_problem_statements.sql` → Run. It switches into the real
+`authenticated` and `anon` database roles and tries to read/write the content table and call the admin
+functions. Expect **ALL PROBLEM STATEMENT TESTS PASSED**. It is rolled back, so your real content is untouched.
+
+**B. Live API test with real accounts.**
+```bash
+npm run verify -- --allow-clear
+```
+This now also signs in as a team leader and as a signed-out visitor and tries to read the content through
+the same API the website uses. If you've already entered statements it uses them as the leak markers (and
+never changes them). If none exist yet it writes a temporary draft to PS001 and removes it (needs
+`SUPABASE_SERVICE_ROLE_KEY` in your local `.env`). **It ends by clearing all assignments**, so run it only
+before the event.
+
+**C. Manual check as a team leader (browser dev tools).**
+Sign in as `T001`. Open DevTools → Network and look at every response: `get_my_state` and
+`roll_problem_statement` should contain only the team code and a `PSxxx` id. In the Console, try
+`await fetch('<SUPABASE_URL>/rest/v1/problem_statement_content?select=*', {headers:{apikey:'<publishable key>', Authorization:'Bearer <session token>'}})`
+(the token is in Application → Local Storage). Expect an error such as *permission denied for table*
+and no content. Then try `/rest/v1/rpc/admin_get_problem_statement` with `{"p_id":"PS001"}`: expect `42501 forbidden`.
+
+### Security measures implemented
+- **Separate table** `problem_statement_content`, one row per statement (`unique(problem_statement_id)`), linked to the six existing ids.
+- **RLS on, admin-only select policy, and no table privileges at all** for `anon`/`authenticated`: a team's direct query is
+  refused by PostgreSQL before any row is considered. There are no insert/update/delete policies.
+- **All reads/writes go through three `SECURITY DEFINER` functions** (`admin_list_problem_statements`,
+  `admin_get_problem_statement`, `admin_save_problem_statement`). Each checks `is_admin()`, which reads the
+  role from the `profiles` table using the verified login. The browser never supplies a role. Execute is revoked
+  from `anon`; `search_path` is fixed.
+- **Nothing existing returns content.** `get_my_state`, `roll_problem_statement`, the admin overview that feeds
+  every CSV export, and the audit log were not changed and do not touch the new table.
+- **The audit log records who/what/which id/version, never the text.**
+- **Database-enforced rules:** valid ids only (PS001–PS006), status draft/published, length limits,
+  "published must be complete", optimistic version check against silent overwrites.
+- The table is explicitly removed from Supabase Realtime if it was ever added.
+- On the website: content is rendered as text (never HTML), and it is cleared from the page on logout.
+- No service-role key or secret is in `public/`.
+
+### Status of this feature: verified vs. NOT yet verified
+**Verified here (82 original + 46 new browser checks, all passing, using an in-memory mock backend that follows the same rules):**
+admin add/edit/save/publish for PS001–PS006, form fields and buttons, status badges, last-updated, confirmations,
+stale-save refusal, preview, content intact after logging out and in, content not left in the page after logout,
+HTML in content shown as inert text, activity log and CSV exports contain no content, team workflow (roll, refresh,
+persistence) still works and the team page contains no content, no horizontal scroll at 320 px, 44 px buttons.
+
+**NOT verified, and so this feature should not be called secure yet:** the SQL migration has **not been run on a real
+Postgres/Supabase** (none was available here), so the following are untested until you run tests A and B above:
+RLS and privilege denial for team leaders and anonymous users, the `is_admin()` checks inside the functions, the
+database constraints, the duplicate-record and stale-version rules, audit-log writes, and that your existing
+data is untouched by the migration. The mock cannot prove any of these. If test A or B fails, don't use the feature
+with real statements until it is fixed.
+
+---
+
+## Automatic logout
+
+Both team leaders and the admin are logged out after **10 minutes without use**. For the last 60 seconds a
+"Still there?" dialog counts down, with **Stay signed in** and **Log out now**. Change the limits in
+`public/config.js` (`IDLE_TIMEOUT_MINUTES`, `IDLE_WARNING_SECONDS`).
+
+- Typing, tapping, scrolling or moving the mouse counts as use, in any open tab of the site.
+- It never logs anyone out in the middle of a roll or a statement save.
+- A team's saved assignment is unaffected; they sign in again and see the same result.
+- For the admin, unsaved text in the statement form is discarded on auto-logout (deliberately, so it isn't left
+  on a shared computer). Save drafts as you go.
+- The timer compares clock times, so a phone that sleeps or a throttled background tab still logs out on time.
+- This is a convenience layer in the browser. Supabase's own session expiry is a separate setting
+  (Authentication → Sessions) if you also want a hard server-side limit.
 
 ---
 
